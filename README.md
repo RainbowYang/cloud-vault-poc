@@ -27,25 +27,7 @@ npm run build      # 产物在 dist/
 ### Supabase 配置（5 分钟）
 
 1. 在 [supabase.com](https://supabase.com) 创建项目（区域选东京/新加坡）。
-2. SQL Editor 里执行：
-
-```sql
-create table if not exists public.vaults (
-  user_id uuid primary key references auth.users(id) on delete cascade,
-  envelope jsonb not null,
-  updated_at timestamptz not null default now()
-);
-
-alter table public.vaults enable row level security;
-
-create policy "vault_select_own" on public.vaults
-  for select to authenticated using (auth.uid() = user_id);
-create policy "vault_insert_own" on public.vaults
-  for insert to authenticated with check (auth.uid() = user_id);
-create policy "vault_update_own" on public.vaults
-  for update to authenticated using (auth.uid() = user_id)
-  with check (auth.uid() = user_id);
-```
+2. SQL Editor 里执行 [`supabase/schema.sql`](supabase/schema.sql)（建表 + RLS 策略）。
 
 3. Project Settings → API 里复制 Project URL 和 anon key。
 4. 页面「设置」里切换驱动、填入 URL/anon key，保存并重新加载。
@@ -73,7 +55,15 @@ Supabase Auth（邮箱魔法链接）──决定：谁能读写哪一行（RLS�
 
 ## 部署到 GitHub Pages
 
-推送到 `main` 后 `Deploy to GitHub Pages` 工作流自动构建发布。首次需在仓库 Settings → Pages 把 Source 设为「GitHub Actions」。
+1. 推送到 `main` 后 `Deploy to GitHub Pages` 工作流自动构建发布；首次需在仓库 Settings → Pages 把 Source 设为「GitHub Actions」。
+2. Supabase 的两个公开值通过仓库 Variables 注入（Settings → Secrets and variables → Actions → Variables）：
+
+   - `VITE_SUPABASE_URL`
+   - `VITE_SUPABASE_ANON_KEY`
+
+   这样任何终端打开页面即自带后端配置，无需手填。本地开发用 `.env.local`（参考 `.env.example`）。
+
+**计划限制：** 私有仓库开启 GitHub Pages 需要 GitHub Pro/Team 计划；免费计划的 Pages 仅支持公开仓库，API 会返回 `Your current plan does not support GitHub Pages for this repository`。另外注意：Pages 站点本身总是公开可访问的，私有仓库只保护源码与历史记录，不保护构建产物（前端代码本来就会下发到浏览器）。
 
 ## 目录
 
@@ -85,6 +75,9 @@ src/
   storage.ts   localStorage / Supabase vaults 表
   ai.ts        mock / Anthropic（浏览器直连）/ OpenAI 兼容
   App.tsx      三段式界面：登录 → 创建/解锁 → 保险箱
+supabase/
+  schema.sql   vaults 表 + RLS 策略
+.env.example   构建期注入的 Supabase 公开配置示例
 ```
 
 ## 接下一步（正式财务系统）

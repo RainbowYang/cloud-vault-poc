@@ -636,7 +636,7 @@ function SettingsPanel({
           </>
         )}
       </div>
-      <p className="hint">切换驱动会重新加载页面并重新登录。Supabase 模式首次使用需要创建项目和 vaults 表（见 README）。</p>
+      <p className="hint">切换驱动会重新加载页面并重新登录。若部署时已由构建注入 VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY，这里会自动预填；手填仍可覆盖。Supabase 模式首次使用需要创建项目和 vaults 表（见 README 与 supabase/schema.sql）。</p>
       <button className="btn primary" onClick={apply}>
         保存并重新加载
       </button>
