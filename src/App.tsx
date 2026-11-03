@@ -8,7 +8,7 @@ import { callAI, type ChatMessage } from "./ai";
 import { loadSettings, saveSettings } from "./settings";
 import type { AIConfig, AppSettings, DemoRecord, Envelope, SessionUser, VaultPayload } from "./types";
 
-type Phase = "boot" | "login" | "create" | "unlock" | "vault";
+type Phase = "boot" | "login" | "recovery" | "create" | "unlock" | "vault";
 type Tab = "records" | "ai" | "settings" | "cipher";
 
 const EMPTY_AI: AIConfig = { provider: "mock", baseUrl: "", model: "claude-opus-5-5", apiKey: "" };
@@ -29,6 +29,7 @@ export default function App() {
   const [tab, setTab] = useState<Tab>("records");
   const [syncedAt, setSyncedAt] = useState("");
   const enteredUserRef = useRef<string | null>(null);
+  const recoveryRef = useRef(false);
   const saveTimer = useRef<number | null>(null);
 
   const { auth, store } = useMemo<{ auth: AuthApi; store: VaultStore }>(() => {
@@ -41,6 +42,7 @@ export default function App() {
 
   const enterVault = useCallback(
     async (u: SessionUser) => {
+      if (recoveryRef.current) return;
       if (enteredUserRef.current === u.id) return;
       enteredUserRef.current = u.id;
       setError("");
@@ -108,6 +110,35 @@ export default function App() {
       unsub();
     };
   }, [auth, enterVault]);
+
+  // 重置密码邮件回跳（Supabase 会触发 PASSWORD_RECOVERY）
+  useEffect(() => {
+    const unsub = auth.onAuthEvent((event) => {
+      if (event === "PASSWORD_RECOVERY") {
+        recoveryRef.current = true;
+        if (window.location.hash) window.history.replaceState(null, "", window.location.pathname);
+        setError("");
+        setPhase("recovery");
+      }
+    });
+    return unsub;
+  }, [auth]);
+
+  const completeRecovery = useCallback(
+    async (pass: string) => {
+      await auth.updatePassword(pass);
+      recoveryRef.current = false;
+      const u = await auth.getUser();
+      if (!u) {
+        setPhase("login");
+        return;
+      }
+      enteredUserRef.current = null;
+      setUser(u);
+      await enterVault(u);
+    },
+    [auth, enterVault],
+  );
 
   const persist = useCallback(
     (next: VaultPayload) => {
@@ -239,6 +270,7 @@ export default function App() {
 
       {phase === "create" && user && <CreateScreen onCreate={handleCreate} busy={!!busy} />}
       {phase === "unlock" && envelope && <UnlockScreen onUnlock={handleUnlock} busy={!!busy} />}
+      {phase === "recovery" && <RecoveryScreen onSave={completeRecovery} />}
 
       {phase === "vault" && payload && key && user && envelope && (
         <main className="vault">
@@ -300,15 +332,24 @@ function LoginScreen({
   settings: AppSettings;
   onSignedIn: () => Promise<void>;
 }) {
-  const [mode, setMode] = useState<"password" | "link">("password");
+  const [screen, setScreen] = useState<"login" | "register" | "forgot">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
   const [name, setName] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
   const isSupabase = auth.kind === "supabase";
+
+  function go(next: "login" | "register" | "forgot") {
+    setScreen(next);
+    setErr("");
+    setNotice("");
+    setPassword("");
+    setConfirm("");
+  }
 
   async function run(task: () => Promise<void>) {
     setBusy(true);
@@ -329,31 +370,32 @@ function LoginScreen({
       await onSignedIn();
     });
 
-  const submitPassword = () =>
+  const submitLogin = () =>
     run(async () => {
       if (!email.trim() || !password) throw new Error("请输入邮箱和密码");
       await auth.signInWithPassword(email, password);
       await onSignedIn();
     });
 
-  const submitSignUp = () =>
+  const submitRegister = () =>
     run(async () => {
-      if (!email.trim() || password.length < 6) throw new Error("请输入邮箱，密码至少 6 位");
+      if (!email.trim()) throw new Error("请输入邮箱");
+      if (password.length < 6) throw new Error("密码至少 6 位");
+      if (password !== confirm) throw new Error("两次输入的密码不一致");
       const result = await auth.signUpWithPassword(email, password);
       if (result === "signed-in") {
         await onSignedIn();
       } else {
-        setNotice(
-          `已向 ${email.trim()} 发送确认邮件：点一次链接即完成注册，之后用密码登录即可。不想每次注册都收邮件，可在 Supabase 控制台 Authentication → Providers → Email 关闭 Confirm email。`,
-        );
+        go("login");
+        setNotice(`确认邮件已发送到 ${email.trim()}：点开链接完成注册后，回到这里用密码登录。若收不到，可在 Supabase 控制台关闭 Confirm email。`);
       }
     });
 
-  const submitMagic = () =>
+  const submitForgot = () =>
     run(async () => {
       if (!email.trim()) throw new Error("请输入邮箱");
-      await auth.sendMagicLink(email);
-      setNotice(`已向 ${email.trim()} 发送登录链接。注意：链接只能在本浏览器、本地址（${window.location.host}）打开才有效。`);
+      await auth.requestPasswordReset(email);
+      setNotice(`如果 ${email.trim()} 已注册，重置邮件已发送。点开邮件里的链接会回到本页设置新密码；链接有时效，过期请重新发送。`);
     });
 
   return (
@@ -382,69 +424,150 @@ function LoginScreen({
           </>
         ) : (
           <>
-            <h2>登录</h2>
-            <div className="mode-switch">
-              <button
-                className={mode === "password" ? "mode active" : "mode"}
-                onClick={() => {
-                  setMode("password");
-                  setErr("");
-                  setNotice("");
-                }}
-              >
-                邮箱 + 密码
-              </button>
-              <button
-                className={mode === "link" ? "mode active" : "mode"}
-                onClick={() => {
-                  setMode("link");
-                  setErr("");
-                  setNotice("");
-                }}
-              >
-                魔法链接
-              </button>
-            </div>
-            <label className="field">
-              <span>邮箱</span>
-              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
-            </label>
-            {mode === "password" && (
-              <label className="field">
-                <span>密码</span>
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="至少 6 位"
-                  onKeyDown={(e) => e.key === "Enter" && submitPassword()}
-                />
-              </label>
-            )}
-            {mode === "password" ? (
-              <div className="row">
-                <button className="btn primary grow" disabled={busy} onClick={submitPassword}>
-                  {busy ? "处理中…" : "登录"}
+            {screen === "login" && (
+              <>
+                <h2>登录</h2>
+                <label className="field">
+                  <span>邮箱</span>
+                  <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
+                </label>
+                <label className="field">
+                  <span>密码</span>
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="密码"
+                    onKeyDown={(e) => e.key === "Enter" && submitLogin()}
+                  />
+                </label>
+                <button className="btn primary" disabled={busy} onClick={submitLogin}>
+                  {busy ? "登录中…" : "登录"}
                 </button>
-                <button className="btn grow" disabled={busy} onClick={submitSignUp}>
-                  首次注册
-                </button>
-              </div>
-            ) : (
-              <button className="btn primary" style={{ width: "100%" }} disabled={busy} onClick={submitMagic}>
-                {busy ? "发送中…" : "发送魔法链接"}
-              </button>
+                <div className="auth-links">
+                  <button className="link" onClick={() => go("register")}>
+                    注册账号
+                  </button>
+                  <button className="link" onClick={() => go("forgot")}>
+                    忘记密码
+                  </button>
+                </div>
+              </>
             )}
+
+            {screen === "register" && (
+              <>
+                <h2>注册账号</h2>
+                <label className="field">
+                  <span>邮箱</span>
+                  <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
+                </label>
+                <label className="field">
+                  <span>密码</span>
+                  <input
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="至少 6 位"
+                  />
+                </label>
+                <label className="field">
+                  <span>确认密码</span>
+                  <input
+                    type="password"
+                    value={confirm}
+                    onChange={(e) => setConfirm(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && submitRegister()}
+                  />
+                </label>
+                <button className="btn primary" disabled={busy} onClick={submitRegister}>
+                  {busy ? "注册中…" : "注册"}
+                </button>
+                <div className="auth-links">
+                  <button className="link" onClick={() => go("login")}>
+                    已有账号，返回登录
+                  </button>
+                </div>
+                <p className="hint">注册后可能需要点一封确认邮件（取决于 Supabase 的 Confirm email 设置）。</p>
+              </>
+            )}
+
+            {screen === "forgot" && (
+              <>
+                <h2>忘记密码</h2>
+                <p className="muted">输入注册邮箱，我们会发送一封重置邮件；点开链接回到本页设置新密码。</p>
+                <label className="field">
+                  <span>邮箱</span>
+                  <input
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && submitForgot()}
+                    placeholder="you@example.com"
+                  />
+                </label>
+                <button className="btn primary" disabled={busy} onClick={submitForgot}>
+                  {busy ? "发送中…" : "发送重置邮件"}
+                </button>
+                <div className="auth-links">
+                  <button className="link" onClick={() => go("login")}>
+                    返回登录
+                  </button>
+                </div>
+              </>
+            )}
+
             {notice && <p className="ok">{notice}</p>}
             {err && <p className="err">{err}</p>}
             <p className="hint">
               登录态保存在当前浏览器、当前地址（{window.location.host}）下：同一地址刷新不用重登；换地址（localhost / 127.0.0.1 /
               Pages）或换浏览器需要重新登录一次。日常建议固定收藏一个入口。
             </p>
-            <p className="hint">忘记密码：切到「魔法链接」收一封邮件，点开即可登录。</p>
           </>
         )}
         <p className="hint">当前驱动：{settings.driver === "supabase" ? "Supabase" : "本地演示"}</p>
+      </div>
+    </div>
+  );
+}
+
+function RecoveryScreen({ onSave }: { onSave: (pass: string) => Promise<void> }) {
+  const [pass, setPass] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  async function submit() {
+    if (pass.length < 6) return setErr("密码至少 6 位");
+    if (pass !== confirm) return setErr("两次输入的密码不一致");
+    setErr("");
+    setBusy(true);
+    try {
+      await onSave(pass);
+    } catch (e) {
+      setErr(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="center">
+      <div className="card auth-card">
+        <h2>设置新密码</h2>
+        <p className="muted">你已通过邮件链接验证身份。设置新密码后，即可用邮箱 + 密码登录。</p>
+        <label className="field">
+          <span>新密码</span>
+          <input type="password" value={pass} onChange={(e) => setPass(e.target.value)} placeholder="至少 6 位" autoFocus />
+        </label>
+        <label className="field">
+          <span>确认新密码</span>
+          <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} onKeyDown={(e) => e.key === "Enter" && submit()} />
+        </label>
+        <button className="btn primary" disabled={busy} onClick={submit}>
+          {busy ? "保存中…" : "保存新密码"}
+        </button>
+        {err && <p className="err">{err}</p>}
       </div>
     </div>
   );
@@ -776,9 +899,7 @@ function SettingsPanel({
               {passBusy ? "保存中…" : "设置密码"}
             </button>
           </div>
-          <p className="hint">
-            用魔法链接登录的账号没有密码：在这里设置一次，之后就能用「邮箱 + 密码」直接登录，不再依赖邮件。
-          </p>
+          <p className="hint">随时可以在这里修改登录密码；忘记密码请退出登录，在登录页走「忘记密码」流程。</p>
           {passMsg && <p className="ok">{passMsg}</p>}
           {passErr && <p className="err">{passErr}</p>}
         </>

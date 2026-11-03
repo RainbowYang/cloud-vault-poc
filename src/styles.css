@@ -162,6 +162,28 @@ body {
   color: var(--text);
 }
 
+.auth-links {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 12px;
+}
+
+.link {
+  background: none;
+  border: none;
+  color: var(--text-3);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 0;
+  font-family: inherit;
+}
+
+.link:hover {
+  color: var(--text);
+}
+
 .field {
   display: flex;
   flex-direction: column;

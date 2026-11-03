@@ -8,16 +8,18 @@ export interface AuthApi {
   getUser(): Promise<SessionUser | null>;
   /** 本地演示模式：用户名即登录。 */
   signInLocal(name: string): Promise<void>;
-  /** 邮箱 + 密码登录（日常主路径）。 */
+  /** 邮箱 + 密码登录。 */
   signInWithPassword(email: string, password: string): Promise<void>;
   /** 注册：项目开启邮箱确认时返回 confirm-email；否则直接 signed-in。 */
   signUpWithPassword(email: string, password: string): Promise<"signed-in" | "confirm-email">;
-  /** 魔法链接（辅助路径：首次注册验证 / 忘记密码）。 */
-  sendMagicLink(email: string): Promise<void>;
-  /** 为当前登录用户设置/修改密码（魔法链接登录的账号没有密码，用它补齐）。 */
+  /** 忘记密码：发送重置邮件，点开链接回到本页设置新密码。 */
+  requestPasswordReset(email: string): Promise<void>;
+  /** 为当前登录用户设置/修改密码（也用于重置链接回跳后的新密码设置）。 */
   updatePassword(password: string): Promise<void>;
   signOut(): Promise<void>;
   onChange(cb: (user: SessionUser | null) => void): () => void;
+  /** 底层认证事件（如 PASSWORD_RECOVERY），用于识别重置密码回跳。 */
+  onAuthEvent(cb: (event: string) => void): () => void;
 }
 
 const LOCAL_USER_KEY = "vault-poc:local-user";
@@ -29,7 +31,7 @@ function friendlyAuthError(message: string): string {
   if (m.includes("email not confirmed"))
     return "邮箱还未确认：请点注册时收到的确认邮件链接（或在 Supabase 控制台关闭 Confirm email 后重试）";
   if (m.includes("user already registered"))
-    return "该邮箱已注册：如果没有密码，用「魔法链接」登录一次，再到应用「设置」里设置密码";
+    return "该邮箱已注册：请直接登录，或使用「忘记密码」重置";
   if (m.includes("password should be at least")) return "密码太短：Supabase 默认要求至少 6 位";
   if (m.includes("rate limit")) return "操作过于频繁，触发了频率限制，请稍后再试";
   return message;
@@ -54,12 +56,15 @@ export function createLocalAuth(): AuthApi {
     },
     signInWithPassword: notSupported,
     signUpWithPassword: notSupported,
-    sendMagicLink: notSupported,
+    requestPasswordReset: notSupported,
     updatePassword: notSupported,
     async signOut() {
       localStorage.removeItem(LOCAL_USER_KEY);
     },
     onChange() {
+      return () => {};
+    },
+    onAuthEvent() {
       return () => {};
     },
   };
@@ -87,10 +92,9 @@ export function createSupabaseAuth(client: SupabaseClient): AuthApi {
       if (error) throw new Error(friendlyAuthError(error.message));
       return data.session ? "signed-in" : "confirm-email";
     },
-    async sendMagicLink(email) {
-      const { error } = await client.auth.signInWithOtp({
-        email: email.trim(),
-        options: { emailRedirectTo: window.location.origin + window.location.pathname },
+    async requestPasswordReset(email) {
+      const { error } = await client.auth.resetPasswordForEmail(email.trim(), {
+        redirectTo: window.location.origin + window.location.pathname,
       });
       if (error) throw new Error(`发送失败：${friendlyAuthError(error.message)}`);
     },
@@ -106,6 +110,10 @@ export function createSupabaseAuth(client: SupabaseClient): AuthApi {
         const u = session?.user;
         cb(u ? { id: u.id, label: u.email ?? u.id } : null);
       });
+      return () => data.subscription.unsubscribe();
+    },
+    onAuthEvent(cb) {
+      const { data } = client.auth.onAuthStateChange((event) => cb(event));
       return () => data.subscription.unsubscribe();
     },
   };
