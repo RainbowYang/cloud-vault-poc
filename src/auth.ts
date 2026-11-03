@@ -14,6 +14,8 @@ export interface AuthApi {
   signUpWithPassword(email: string, password: string): Promise<"signed-in" | "confirm-email">;
   /** 魔法链接（辅助路径：首次注册验证 / 忘记密码）。 */
   sendMagicLink(email: string): Promise<void>;
+  /** 为当前登录用户设置/修改密码（魔法链接登录的账号没有密码，用它补齐）。 */
+  updatePassword(password: string): Promise<void>;
   signOut(): Promise<void>;
   onChange(cb: (user: SessionUser | null) => void): () => void;
 }
@@ -26,7 +28,8 @@ function friendlyAuthError(message: string): string {
   if (m.includes("invalid login credentials")) return "邮箱或密码不正确";
   if (m.includes("email not confirmed"))
     return "邮箱还未确认：请点注册时收到的确认邮件链接（或在 Supabase 控制台关闭 Confirm email 后重试）";
-  if (m.includes("user already registered")) return "该邮箱已注册，请直接登录（忘记密码可用魔法链接）";
+  if (m.includes("user already registered"))
+    return "该邮箱已注册：如果没有密码，用「魔法链接」登录一次，再到应用「设置」里设置密码";
   if (m.includes("password should be at least")) return "密码太短：Supabase 默认要求至少 6 位";
   if (m.includes("rate limit")) return "操作过于频繁，触发了频率限制，请稍后再试";
   return message;
@@ -52,6 +55,7 @@ export function createLocalAuth(): AuthApi {
     signInWithPassword: notSupported,
     signUpWithPassword: notSupported,
     sendMagicLink: notSupported,
+    updatePassword: notSupported,
     async signOut() {
       localStorage.removeItem(LOCAL_USER_KEY);
     },
@@ -89,6 +93,10 @@ export function createSupabaseAuth(client: SupabaseClient): AuthApi {
         options: { emailRedirectTo: window.location.origin + window.location.pathname },
       });
       if (error) throw new Error(`发送失败：${friendlyAuthError(error.message)}`);
+    },
+    async updatePassword(password) {
+      const { error } = await client.auth.updateUser({ password });
+      if (error) throw new Error(friendlyAuthError(error.message));
     },
     async signOut() {
       await client.auth.signOut();

@@ -272,6 +272,7 @@ export default function App() {
               settings={settings}
               user={user}
               envelope={envelope}
+              auth={auth}
               onLockAndClearCache={async () => {
                 await clearKeyCache();
                 lock();
@@ -684,14 +685,36 @@ function SettingsPanel({
   settings,
   user,
   envelope,
+  auth,
   onLockAndClearCache,
 }: {
   settings: AppSettings;
   user: SessionUser;
   envelope: Envelope;
+  auth: AuthApi;
   onLockAndClearCache: () => Promise<void>;
 }) {
   const [draft, setDraft] = useState<AppSettings>(settings);
+  const [newPass, setNewPass] = useState("");
+  const [passBusy, setPassBusy] = useState(false);
+  const [passMsg, setPassMsg] = useState("");
+  const [passErr, setPassErr] = useState("");
+
+  async function savePassword() {
+    setPassBusy(true);
+    setPassMsg("");
+    setPassErr("");
+    try {
+      if (newPass.length < 6) throw new Error("密码至少 6 位");
+      await auth.updatePassword(newPass);
+      setNewPass("");
+      setPassMsg("密码已更新，下次可直接用邮箱+密码登录。");
+    } catch (e) {
+      setPassErr(errText(e));
+    } finally {
+      setPassBusy(false);
+    }
+  }
 
   function apply() {
     saveSettings(draft);
@@ -736,6 +759,30 @@ function SettingsPanel({
       <button className="btn primary" onClick={apply}>
         保存并重新加载
       </button>
+
+      {auth.supportsPassword && (
+        <>
+          <h3 className="mt">账号</h3>
+          <p className="muted small">当前登录：{user.label}</p>
+          <div className="row wrap">
+            <input
+              type="password"
+              className="grow"
+              value={newPass}
+              onChange={(e) => setNewPass(e.target.value)}
+              placeholder="设置新密码（至少 6 位）"
+            />
+            <button className="btn" disabled={passBusy || newPass.length < 6} onClick={savePassword}>
+              {passBusy ? "保存中…" : "设置密码"}
+            </button>
+          </div>
+          <p className="hint">
+            用魔法链接登录的账号没有密码：在这里设置一次，之后就能用「邮箱 + 密码」直接登录，不再依赖邮件。
+          </p>
+          {passMsg && <p className="ok">{passMsg}</p>}
+          {passErr && <p className="err">{passErr}</p>}
+        </>
+      )}
 
       <h3 className="mt">数据与密钥</h3>
       <div className="row wrap">
