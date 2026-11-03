@@ -299,18 +299,22 @@ function LoginScreen({
   settings: AppSettings;
   onSignedIn: () => Promise<void>;
 }) {
-  const [input, setInput] = useState("");
-  const [sent, setSent] = useState("");
+  const [mode, setMode] = useState<"password" | "link">("password");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
+  const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
-  async function submit() {
+  const isSupabase = auth.kind === "supabase";
+
+  async function run(task: () => Promise<void>) {
     setBusy(true);
     setErr("");
+    setNotice("");
     try {
-      const result = await auth.signIn(input);
-      if (result === "sent") setSent(input.trim());
-      else await onSignedIn();
+      await task();
     } catch (e) {
       setErr(errText(e));
     } finally {
@@ -318,36 +322,128 @@ function LoginScreen({
     }
   }
 
+  const submitLocal = () =>
+    run(async () => {
+      await auth.signInLocal(name);
+      await onSignedIn();
+    });
+
+  const submitPassword = () =>
+    run(async () => {
+      if (!email.trim() || !password) throw new Error("请输入邮箱和密码");
+      await auth.signInWithPassword(email, password);
+      await onSignedIn();
+    });
+
+  const submitSignUp = () =>
+    run(async () => {
+      if (!email.trim() || password.length < 6) throw new Error("请输入邮箱，密码至少 6 位");
+      const result = await auth.signUpWithPassword(email, password);
+      if (result === "signed-in") {
+        await onSignedIn();
+      } else {
+        setNotice(
+          `已向 ${email.trim()} 发送确认邮件：点一次链接即完成注册，之后用密码登录即可。不想每次注册都收邮件，可在 Supabase 控制台 Authentication → Providers → Email 关闭 Confirm email。`,
+        );
+      }
+    });
+
+  const submitMagic = () =>
+    run(async () => {
+      if (!email.trim()) throw new Error("请输入邮箱");
+      await auth.sendMagicLink(email);
+      setNotice(`已向 ${email.trim()} 发送登录链接。注意：链接只能在本浏览器、本地址（${window.location.host}）打开才有效。`);
+    });
+
   return (
     <div className="center">
       <div className="card auth-card">
-        <h2>{auth.kind === "supabase" ? "邮箱登录" : "本地演示登录"}</h2>
-        <p className="muted">
-          {auth.kind === "supabase"
-            ? "通过 Supabase Auth 发送魔法链接；不同邮箱 = 不同用户，数据按用户隔离（RLS）。"
-            : "输入任意用户名即完成登录；不同用户名 = 不同用户，数据存本机 localStorage。用于立即验证全流程，不是安全边界。"}
-        </p>
-        <label className="field">
-          <span>{auth.kind === "supabase" ? "邮箱" : "用户名"}</span>
-          <input
-            type={auth.kind === "supabase" ? "email" : "text"}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            placeholder={auth.kind === "supabase" ? "you@example.com" : "例如 rainbow"}
-            onKeyDown={(e) => e.key === "Enter" && submit()}
-          />
-        </label>
-        <button className="btn primary" disabled={busy || !input.trim()} onClick={submit}>
-          {busy ? "处理中…" : auth.kind === "supabase" ? "发送魔法链接" : "进入"}
-        </button>
-        {sent && <p className="ok">已发送到 {sent}，请查收邮件并在本设备打开链接。</p>}
-        {err && <p className="err">{err}</p>}
-        {auth.kind === "local" && (
-          <p className="hint">想用真实的 Supabase 多用户隔离？去「设置」切换驱动并填入项目 URL 与 anon key（先登录后才能进设置——本地模式下先随便进，再切换）。</p>
+        {!isSupabase ? (
+          <>
+            <h2>本地演示登录</h2>
+            <p className="muted">
+              输入任意用户名即完成登录；不同用户名 = 不同用户，数据存本机 localStorage。仅用于验证加密流程，不是安全边界。
+            </p>
+            <label className="field">
+              <span>用户名</span>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="例如 rainbow"
+                onKeyDown={(e) => e.key === "Enter" && submitLocal()}
+              />
+            </label>
+            <button className="btn primary" disabled={busy || !name.trim()} onClick={submitLocal}>
+              {busy ? "处理中…" : "进入"}
+            </button>
+            <p className="hint">想用真实的 Supabase 多用户隔离？去「设置」切换驱动（先登录后才能进设置）。</p>
+          </>
+        ) : (
+          <>
+            <h2>登录</h2>
+            <div className="mode-switch">
+              <button
+                className={mode === "password" ? "mode active" : "mode"}
+                onClick={() => {
+                  setMode("password");
+                  setErr("");
+                  setNotice("");
+                }}
+              >
+                邮箱 + 密码
+              </button>
+              <button
+                className={mode === "link" ? "mode active" : "mode"}
+                onClick={() => {
+                  setMode("link");
+                  setErr("");
+                  setNotice("");
+                }}
+              >
+                魔法链接
+              </button>
+            </div>
+            <label className="field">
+              <span>邮箱</span>
+              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
+            </label>
+            {mode === "password" && (
+              <label className="field">
+                <span>密码</span>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="至少 6 位"
+                  onKeyDown={(e) => e.key === "Enter" && submitPassword()}
+                />
+              </label>
+            )}
+            {mode === "password" ? (
+              <div className="row">
+                <button className="btn primary grow" disabled={busy} onClick={submitPassword}>
+                  {busy ? "处理中…" : "登录"}
+                </button>
+                <button className="btn grow" disabled={busy} onClick={submitSignUp}>
+                  首次注册
+                </button>
+              </div>
+            ) : (
+              <button className="btn primary" style={{ width: "100%" }} disabled={busy} onClick={submitMagic}>
+                {busy ? "发送中…" : "发送魔法链接"}
+              </button>
+            )}
+            {notice && <p className="ok">{notice}</p>}
+            {err && <p className="err">{err}</p>}
+            <p className="hint">
+              登录态保存在当前浏览器、当前地址（{window.location.host}）下：同一地址刷新不用重登；换地址（localhost / 127.0.0.1 /
+              Pages）或换浏览器需要重新登录一次。日常建议固定收藏一个入口。
+            </p>
+            <p className="hint">忘记密码：切到「魔法链接」收一封邮件，点开即可登录。</p>
+          </>
         )}
-        <p className="hint">
-          当前驱动：{settings.driver === "supabase" ? "Supabase" : "本地演示"}
-        </p>
+        <p className="hint">当前驱动：{settings.driver === "supabase" ? "Supabase" : "本地演示"}</p>
       </div>
     </div>
   );

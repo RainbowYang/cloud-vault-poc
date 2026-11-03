@@ -135,6 +135,33 @@ body {
   margin-top: 4px;
 }
 
+.mode-switch {
+  display: flex;
+  gap: 4px;
+  background: var(--bg);
+  border: 1px solid var(--border-2);
+  border-radius: 8px;
+  padding: 3px;
+  margin: 12px 0 8px;
+}
+
+.mode {
+  flex: 1;
+  background: none;
+  border: none;
+  color: var(--text-3);
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+}
+
+.mode.active {
+  background: var(--panel-2);
+  color: var(--text);
+}
+
 .field {
   display: flex;
   flex-direction: column;
